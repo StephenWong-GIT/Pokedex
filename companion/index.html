@@ -1,0 +1,51 @@
+<!-- Phone UI fragment. build.py wraps this in the Mira package (manifest + WASM). -->
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 16px system-ui, sans-serif; margin: 0; padding: 16px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .muted { opacity: .7; font-size: 13px; }
+  video, #shot { width: 100%; border-radius: 12px; background: #000; margin: 8px 0; }
+  #shot:not([src]) { display: none; }
+  button { font: inherit; padding: 14px; width: 100%; border-radius: 12px; border: 0;
+           background: #e3350d; color: #fff; font-weight: 600; margin: 8px 0; }
+  button:disabled { opacity: .5; }
+  #answer { font-size: 18px; min-height: 1.4em; margin: 8px 0; }
+  #status { font-size: 13px; }
+  label { display: block; font-size: 13px; margin-top: 12px; }
+  input, select { font: inherit; width: 100%; box-sizing: border-box; padding: 10px;
+                  border-radius: 8px; border: 1px solid #8884; margin-top: 4px; }
+  details { margin-top: 16px; }
+  #log { font: 12px ui-monospace, monospace; padding-left: 16px; }
+</style>
+<main id="mira-companion-root">
+  <h1>Pokedex</h1>
+  <div class="muted">Claude model: <span id="model"></span></div>
+
+  <video id="preview" autoplay playsinline muted></video>
+  <button id="scan">Scan</button>
+  <div id="status" class="muted">Starting...</div>
+  <div id="answer"></div>
+  <img id="shot" alt="Last frame sent to Claude">
+
+  <details id="settings">
+    <summary>Settings</summary>
+    <label>Anthropic API key (saved on this phone only)
+      <input id="key" type="password" autocomplete="off" placeholder="sk-ant-...">
+    </label>
+    <label>Camera source
+      <select id="source">
+        <option value="phone">Phone camera (live)</option>
+        <option value="picker">Phone photo picker</option>
+        <option value="url">Camera URL (v2 / external cam)</option>
+      </select>
+    </label>
+    <label>Camera URL (for "Camera URL" source)
+      <input id="camurl" type="url" placeholder="http://192.168.1.50/capture">
+    </label>
+  </details>
+
+  <details>
+    <summary>Log</summary>
+    <ul id="log"></ul>
+  </details>
+</main>
