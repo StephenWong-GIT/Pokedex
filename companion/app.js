@@ -5,7 +5,9 @@
   const KEY_NAME = "anthropicKey";
   const URL_NAME = "cameraUrl";
   const LINE_CHARS = 40;     // ~fits 592px at the 24px font
-  const LINES_PER_PAGE = 9;  // + 1 footer line = the glasses' 10-line body
+  const LINES_PER_PAGE = 8;  // + blank + up to 2 footer lines = the glasses' body
+  const FOLLOWUP_MS = 10000; // conversation mode: listen this long after an answer
+  const CONVO_NAME = "conversationMode";
 
   const READ_PROMPT =
     "Read out all the text in the photo. If it isn't in English, translate it into English.";
@@ -88,18 +90,20 @@
     return lines;
   }
 
-  // Long answers (e.g. a translated scroll) are split into pages; a ring
-  // swipe shows the next one.
+  // Long answers (e.g. a translated scroll) are split into pages; say
+  // "Next page" or pick it from the ring menu to see the next one.
   let pages = []; // no answer yet: glasses keep their idle message
   let page = 0;
   function morePages() { return page < pages.length - 1; }
   function sendPage() {
     if (!hasBridge || !pages.length) return;
-    let lines = pages[page];
+    const footer = [];
     if (pages.length > 1) {
-      const hint = morePages() ? "swipe for more" : "swipe to scan";
-      lines = lines.concat("", "(" + (page + 1) + "/" + pages.length + ") " + hint);
+      footer.push("(" + (page + 1) + "/" + pages.length + ")" + (morePages() ? " say NEXT PAGE for more" : ""));
     }
+    if (dict && dict.mode === "followup") footer.push("Listening... ask a follow-up");
+    let lines = pages[page];
+    if (footer.length) lines = lines.concat("", ...footer);
     miraCompanion.sendToApp({ t: lines.join("|") }).catch((e) => log("send failed: " + e));
   }
   function show(text) {
@@ -124,6 +128,7 @@
     if (working) return;
     working = true;
     setBusy(true);
+    let ok = false;
     try {
       const key = $("key").value.trim();
       if (!key) throw new Error("Add your Anthropic API key in Settings first.");
@@ -134,6 +139,7 @@
       addChat("bot", answer);
       log(label + ": " + answer);
       show(answer);
+      ok = true;
     } catch (e) {
       const msg = e && e.message ? e.message : String(e);
       status("Error: " + msg);
@@ -143,6 +149,7 @@
       working = false;
       setBusy(false);
     }
+    if (ok && $("convo").checked) startAsk("followup");
   }
 
   // New photo -> new conversation. An optional question replaces the default
@@ -181,6 +188,7 @@
   // foreground; Mira then runs our registered commands and, on request,
   // dictation. Mira releases the mic when the app closes or glasses disconnect.
   const canVoice = () => hasBridge && typeof miraCompanion.startCapture === "function";
+  const norm = (t) => String(t || "").toLowerCase().replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
   async function setupVoice() {
     if (!canVoice() || typeof miraCompanion.setVoiceCommands !== "function") {
       $("voicehelp").textContent = "Voice: not available here. Type a question, or use the keyboard's dictation mic.";
@@ -196,11 +204,24 @@
       log("voice setup failed: " + ((e && e.message) || e));
     }
   }
-  function onVoiceCommand(m) {
-    if (dict) return; // the question being dictated may contain a command word
-    const v = VOICE.find((x) => x.say.toLowerCase() === String(m.command || "").toLowerCase());
-    log('voice: "' + m.command + '"' + (v ? "" : " (unknown)"));
-    if (v) ACTIONS[v.act]("voice");
+
+  // A command can arrive twice: once from the recogniser and once as the
+  // dictated words of a follow-up. Run it only once.
+  let lastCmd = { act: "", at: 0 };
+  const isRepeat = (v) => lastCmd.act === v.act && Date.now() - lastCmd.at < 3000;
+  function runCommand(v, origin) {
+    if (isRepeat(v)) return;
+    lastCmd = { act: v.act, at: Date.now() };
+    log(origin + ': "' + v.say + '"');
+    ACTIONS[v.act]("voice");
+  }
+  async function onVoiceCommand(m) {
+    const v = VOICE.find((x) => norm(x.say) === norm(m.command));
+    if (!v) { log('voice: "' + m.command + '" (unknown)'); return; }
+    if (isRepeat(v)) return; // already handled as dictated words; don't touch the new window
+    if (dict && dict.mode !== "followup") return; // part of an explicit question
+    await cancelAsk(); // trigger words win over the follow-up window
+    runCommand(v, "voice");
   }
 
   // Glasses-only messages that don't change the saved answer pages.
@@ -208,31 +229,51 @@
     if (hasBridge) miraCompanion.sendToApp({ t: wrap(text).slice(0, 10).join("|") }).catch(() => {});
   }
 
-  // Spoken questions. mode "hold": talk while holding the touch bar, sent on
-  // release. Otherwise ("menu"/voice): sent when Mira detects you stopped.
+  // Spoken questions, three ways:
+  //   "hold"     talk while holding the touch bar; sent on release
+  //   "menu"     "Ask a question" (menu or voice); sent when you pause
+  //   "followup" conversation mode: opens after each answer for FOLLOWUP_MS
+  //              and closes quietly if you don't start talking
   let dict = null;
   async function startAsk(mode) {
-    if (working || dict) return;
+    if (working) return;
+    if (dict) {
+      if (dict.mode !== "followup") return;
+      await cancelAsk(); // an explicit ask replaces the follow-up window
+    }
     if (!canVoice() || typeof miraCompanion.startDictation !== "function") {
-      flash("Voice questions need the Mira app. Type your question on the phone.");
+      if (mode !== "followup") flash("Voice questions need the Mira app. Type your question on the phone.");
       return;
     }
     const id = "q" + Date.now();
-    dict = { id, mode, text: "", timer: 0 };
+    const d = (dict = { id, mode, text: "", timer: 0 });
     $("question").placeholder = "Listening...";
-    if (mode !== "hold") flash("Listening... ask your question.");
     try {
       await miraCompanion.startCapture(); // no-op if already running
       await miraCompanion.startDictation({ captureID: id, endpointDetection: mode !== "hold" });
-      // Give up if nothing usable arrives (hold mode ends on release instead).
-      if (mode !== "hold") dict.timer = setTimeout(finishAsk, 15000);
     } catch (e) {
-      dict = null;
+      if (dict === d) dict = null;
       $("question").placeholder = "Ask about the photo...";
       const msg = (e && e.message) || String(e);
       log("dictation failed: " + msg);
-      flash("Mic unavailable: " + msg);
+      if (mode !== "followup") flash("Mic unavailable: " + msg);
+      return;
     }
+    if (dict !== d) return; // cancelled while starting
+    if (mode === "followup") {
+      sendPage(); // adds the "Listening..." line under the answer
+      d.timer = setTimeout(followupTimeout, FOLLOWUP_MS);
+    } else if (mode === "menu") {
+      flash("Listening... ask your question.");
+      d.timer = setTimeout(finishAsk, 15000);
+    }
+  }
+  // Window over: if you're mid-sentence, wait for Mira to mark it final
+  // (up to 10 s more); otherwise close quietly.
+  function followupTimeout() {
+    if (!dict || dict.mode !== "followup") return;
+    if (dict.text) dict.timer = setTimeout(finishAsk, 10000);
+    else cancelAsk();
   }
   function onDictation(m) {
     if (!dict || (m.captureID && m.captureID !== dict.id)) return; // late text
@@ -240,6 +281,17 @@
     $("question").placeholder = dict.text || "Listening...";
     if (m.final && dict.mode !== "hold" && dict.text) finishAsk();
   }
+  // Stop listening and discard what was heard.
+  async function cancelAsk() {
+    if (!dict) return;
+    const d = dict;
+    dict = null;
+    clearTimeout(d.timer);
+    $("question").placeholder = "Ask about the photo...";
+    try { await miraCompanion.stopDictation(); } catch (e) {}
+    if (d.mode === "followup") sendPage(); // remove the "Listening..." line
+  }
+  // Stop listening and use what was heard.
   async function finishAsk() {
     if (!dict) return;
     const d = dict;
@@ -251,7 +303,14 @@
       const r = await miraCompanion.stopDictation(); // keeps voice commands running
       if (r && typeof r.text === "string" && r.text.trim()) text = r.text.trim();
     } catch (e) { log("stopDictation: " + ((e && e.message) || e)); }
-    if (!text) { flash("Didn't catch that. Try again."); return; }
+    if (!text) {
+      if (d.mode === "followup") sendPage();
+      else flash("Didn't catch that. Try again.");
+      return;
+    }
+    // A trigger word said on its own is a command, not a question.
+    const v = VOICE.find((x) => norm(x.say) === norm(text));
+    if (v) { runCommand(v, "voice"); return; }
     log('heard: "' + text + '"');
     ask(text, "voice");
   }
@@ -287,9 +346,19 @@
     }
   }
 
+  async function onAction(a) {
+    if (dict && dict.mode === "followup" && a !== "ask" && a !== "hold") await cancelAsk();
+    ACTIONS[a]("glasses");
+  }
+
   // ---- wire up
   async function init() {
     $("key").value = await load(KEY_NAME);
+    $("convo").checked = (await load(CONVO_NAME)) !== "off";
+    $("convo").addEventListener("change", () => {
+      save(CONVO_NAME, $("convo").checked ? "on" : "off");
+      if (!$("convo").checked && dict && dict.mode === "followup") cancelAsk();
+    });
     if (!$("key").value) $("settings").open = true; // first run: show the key field
     $("camurl").value = await load(URL_NAME);
     $("key").addEventListener("change", () => save(KEY_NAME, $("key").value.trim()));
@@ -309,11 +378,12 @@
     $("voicehelp").textContent =
       'Say: "' + VOICE.map((v) => v.say).join('", "') + '". On the glasses: tap = capture, ' +
       "swipe = action menu, hold = ask out loud. Or type any question above.";
+    if (hasBridge) $("voicehelp").textContent += " After each answer the glasses listen for 10 s for a follow-up.";
 
     if (hasBridge) {
       miraCompanion.onFromApp((m) => {
         if (!m) return;
-        if (m.type === "action" && ACTIONS[m.a]) ACTIONS[m.a]("glasses");
+        if (m.type === "action" && ACTIONS[m.a]) onAction(m.a);
         else if (m.type === "voiceCommand") onVoiceCommand(m);
         else if (m.type === "dictation") onDictation(m);
         else if (m.type === "hello") { log("glasses connected"); sendPage(); setupVoice(); }

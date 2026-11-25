@@ -51,7 +51,7 @@ Then open **Settings** on the Pokedex phone page and paste your Anthropic API ke
 
 ## Controls
 
-Every capture starts a new conversation about that photo. Questions after it are about the same photo until you capture again.
+Every capture starts a new conversation about that photo. Trigger words work at any time, including during the 10-second follow-up window. Questions after it are about the same photo until you capture again.
 
 | Input | Action |
 |---|---|
@@ -60,8 +60,9 @@ Every capture starts a new conversation about that photo. Questions after it are
 | Say **"Tell me more"** | Follow-up about the same photo |
 | Say **"Ask a question"**, then your question | Any spoken question (Mira dictation; sent when you pause) |
 | Say **"Next page"** | Next page of a long answer |
-| Tap touch bar | New photo + description (or pick the highlighted menu item) |
-| Swipe (ring or touch bar) | Open the action menu / move the highlight. Stop swiping and the highlighted item runs after 1.5 s; Cancel closes it |
+| Just talk, right after an answer | **Conversation mode:** for 10 s after each answer the glasses listen for a follow-up question (toggle in Settings) |
+| Tap touch bar | New photo + description, or run the highlighted menu item |
+| Swipe (ring or touch bar) | Open the action menu / move the highlight. Nothing runs until you tap; an untouched menu closes after 10 s |
 | Hold touch bar | Talk while holding; your question is sent when you let go |
 | Double tap | Mira navigation (sidebar/Home) |
 | Phone **Scan** / **Ask** | Same actions from the phone (typing or keyboard dictation) |

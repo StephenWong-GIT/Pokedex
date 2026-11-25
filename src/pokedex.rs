@@ -4,9 +4,9 @@
 // camera frame and/or asks Claude, and replies {"t":"line one|line two|..."}
 // -> we draw those lines on the glasses.
 //
-//   tap            capture now (or pick the highlighted menu item)
-//   swipe / ring   open the action menu, move the highlight; stop swiping and
-//                  the highlighted item runs after MENU_DWELL_MS
+//   tap            capture now, or run the highlighted menu item
+//   swipe / ring   open the action menu and move the highlight (nothing runs
+//                  until you tap; the menu closes after MENU_IDLE_MS)
 //   hold / release talk while holding to ask a question (phone dictation)
 //
 // Voice commands are handled entirely on the phone. The phone does all
@@ -34,7 +34,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! { loop {} }
 const APP_NAME: &[u8] = b"Pokedex"; // must match the manifest title in build.py
 const MAX_TEXT: usize = 1024;
 const BUSY_TIMEOUT_MS: u32 = 25_000;
-const MENU_DWELL_MS: u32 = 1_500; // pause after the last swipe before the item runs
+const MENU_IDLE_MS: u32 = 10_000; // close an untouched menu without running anything
 
 const HELLO: &[u8] = b"{\"type\":\"hello\"}";
 const CAPTURE: &[u8] = b"{\"type\":\"action\",\"a\":\"capture\"}";
@@ -52,7 +52,6 @@ const MENU: [(&[u8], &[u8]); 6] = [
 ];
 const ROW_Y: i32 = 84;
 const ROW_H: i32 = 52;
-const BAR_W: i32 = 592;
 
 const IDLE_MSG: &[u8] = b"Say CAPTURE or tap to scan.|Swipe the ring for more actions.|Hold the touch bar to ask a question.";
 
@@ -64,7 +63,6 @@ static mut BUSY_MS: u32 = 0; // give up if the phone never answers
 static mut MENU_OPEN: bool = false;
 static mut SEL: usize = 0;
 static mut MENU_MS: u32 = 0;
-static mut BAR: i32 = 0;
 static mut HOLDING: bool = false;
 // Outgoing messages, sent in order; a busy bridge retries on later ticks.
 static mut OUTBOX: [&[u8]; 4] = [b""; 4];
@@ -99,9 +97,7 @@ unsafe fn render() {
             if on { fill_rect(24, y + 6, 6, 32, 15); }
             label(44, y, 540, if on { 15 } else { 5 }, 2, item.0);
         }
-        // Shrinking bar = time left before the highlighted item runs.
-        if BAR > 0 { fill_rect(24, 410, BAR, 6, 15); }
-        label(24, 428, 592, 10, 1, b"Stop swiping to pick, or tap to pick now");
+        label(24, 428, 592, 10, 1, b"Swipe to move, tap to choose");
         content::cursor(600, ROW_Y + SEL as i32 * ROW_H + 20, true);
     } else {
         // Body: lines separated by '|' (phone pre-wraps to fit 640px).
@@ -189,13 +185,7 @@ pub unsafe extern "C" fn app_render(ms: i32) {
     }
     if MENU_OPEN {
         MENU_MS = MENU_MS.saturating_add(ms);
-        if MENU_MS >= MENU_DWELL_MS {
-            pick();
-            dirty = false;
-        } else {
-            let bar = (BAR_W as u32 * (MENU_DWELL_MS - MENU_MS) / MENU_DWELL_MS) as i32 & !7;
-            if bar != BAR { BAR = bar; dirty = true; }
-        }
+        if MENU_MS >= MENU_IDLE_MS { MENU_OPEN = false; dirty = true; }
     }
     if BUSY {
         BUSY_MS = BUSY_MS.saturating_add(ms);
@@ -244,7 +234,6 @@ pub unsafe extern "C" fn app_event(e: i32) {
                 SEL = (SEL + MENU.len() - 1) % MENU.len();
             }
             MENU_MS = 0;
-            BAR = BAR_W;
         }
         _ => return,
     }

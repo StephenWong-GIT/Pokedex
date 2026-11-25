@@ -14,6 +14,8 @@
   input, select { font: inherit; width: 100%; box-sizing: border-box; padding: 10px;
                   border-radius: 8px; border: 1px solid #8884; margin-top: 4px; }
   details { margin-top: 16px; }
+  label.check { display: flex; gap: 10px; align-items: center; }
+  label.check input { width: auto; margin: 0; }
   #log { font: 12px ui-monospace, monospace; padding-left: 16px; }
   #chat { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
   .msg { padding: 8px 12px; border-radius: 12px; max-width: 85%; white-space: pre-wrap; }
@@ -52,6 +54,9 @@
     <summary>Settings</summary>
     <label>Anthropic API key (saved on this phone only)
       <input id="key" type="password" autocomplete="off" placeholder="sk-ant-...">
+    </label>
+    <label class="check"><input id="convo" type="checkbox" checked>
+      Conversation mode: after each answer, listen 10 s for a follow-up question
     </label>
     <label>Camera source
       <select id="source">
