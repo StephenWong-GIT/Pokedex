@@ -42,16 +42,17 @@ const HOLD: &[u8] = b"{\"type\":\"action\",\"a\":\"hold\"}";
 const RELEASE: &[u8] = b"{\"type\":\"action\",\"a\":\"release\"}";
 
 // Ring/touch-bar menu: label, message to the phone (empty = just close).
-const MENU: [(&[u8], &[u8]); 6] = [
+const MENU: [(&[u8], &[u8]); 7] = [
     (b"Capture", CAPTURE),
     (b"Read it", b"{\"type\":\"action\",\"a\":\"read\"}"),
     (b"Tell me more", b"{\"type\":\"action\",\"a\":\"more\"}"),
     (b"Ask a question", b"{\"type\":\"action\",\"a\":\"ask\"}"),
     (b"Next page", b"{\"type\":\"action\",\"a\":\"next\"}"),
+    (b"Save photo", b"{\"type\":\"action\",\"a\":\"save\"}"),
     (b"Cancel", b""),
 ];
 const ROW_Y: i32 = 84;
-const ROW_H: i32 = 52;
+const ROW_H: i32 = 46;
 
 const IDLE_MSG: &[u8] = b"Say CAPTURE or tap to scan.|Swipe the ring for more actions.|Hold the touch bar to ask a question.";
 

@@ -14,6 +14,8 @@
   input, select { font: inherit; width: 100%; box-sizing: border-box; padding: 10px;
                   border-radius: 8px; border: 1px solid #8884; margin-top: 4px; }
   details { margin-top: 16px; }
+  #savedgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 8px 0; }
+  #savedgrid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; }
   label.check { display: flex; gap: 10px; align-items: center; }
   label.check input { width: auto; margin: 0; }
   #log { font: 12px ui-monospace, monospace; padding-left: 16px; }
@@ -47,8 +49,18 @@
     <button class="chip" type="button" data-q="READ">What does it say?</button>
     <button class="chip" type="button" data-q="Tell me more about it.">Tell me more</button>
     <button class="chip" type="button" data-q="What is it worth, roughly?">Worth?</button>
+    <button class="chip" type="button" id="savebtn">Save photo</button>
   </div>
   <div id="voicehelp" class="muted"></div>
+
+  <details id="savedbox" hidden>
+    <summary>Saved photos (<span id="savedcount">0</span>)</summary>
+    <p class="muted">Kept on this phone only. Tap a photo to share it, or add them all at once,
+      then choose "Save Images" to put them in your camera roll.</p>
+    <div id="savedgrid"></div>
+    <button id="shareall" type="button">Add all to camera roll</button>
+    <button id="clearsaved" type="button" class="chip">Clear saved photos</button>
+  </details>
 
   <details id="settings">
     <summary>Settings</summary>
@@ -57,6 +69,9 @@
     </label>
     <label class="check"><input id="convo" type="checkbox" checked>
       Conversation mode: after each answer, listen 10 s for a follow-up question
+    </label>
+    <label class="check"><input id="autosave" type="checkbox">
+      Save every capture (otherwise say "Save" or tap Save photo)
     </label>
     <label>Camera source
       <select id="source">

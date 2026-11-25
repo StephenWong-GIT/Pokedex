@@ -60,6 +60,7 @@ Every capture starts a new conversation about that photo. Trigger words work at 
 | Say **"Tell me more"** | Follow-up about the same photo |
 | Say **"Ask a question"**, then your question | Any spoken question (Mira dictation; sent when you pause) |
 | Say **"Next page"** | Next page of a long answer |
+| Say **"Save"** (or ring menu / phone **Save photo**) | Keep the current photo in **Saved photos** on the phone page |
 | Just talk, right after an answer | **Conversation mode:** for 10 s after each answer the glasses listen for a follow-up question (toggle in Settings) |
 | Tap touch bar | New photo + description, or run the highlighted menu item |
 | Swipe (ring or touch bar) | Open the action menu / move the highlight. Nothing runs until you tap; an untouched menu closes after 10 s |
@@ -67,7 +68,11 @@ Every capture starts a new conversation about that photo. Trigger words work at 
 | Double tap | Mira navigation (sidebar/Home) |
 | Phone **Scan** / **Ask** | Same actions from the phone (typing or keyboard dictation) |
 
-The ring menu holds: Capture, Read it, Tell me more, Ask a question, Next page, Cancel.
+The ring menu holds: Capture, Read it, Tell me more, Ask a question, Next page, Save photo, Cancel.
+
+## Saving photos
+
+Captures are not kept unless you save them. Saved photos stay on the phone (in the page's own storage) under **Saved photos**. iOS doesn't let a web page write to the camera roll on its own, so tap **Add all to camera roll** (or a single photo) and pick **Save Images** in the share sheet. Settings has an option to save every capture automatically.
 
 Voice uses Mira's SDK: `setVoiceCommands` + `startCapture` for the commands and `startDictation` for free-form questions. While the Pokedex app is open in the foreground, the glasses microphone stays on so the commands can be heard; Mira releases it when you leave the app. Voice events are written to the phone page's **Log**.
 

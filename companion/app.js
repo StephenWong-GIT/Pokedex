@@ -8,6 +8,7 @@
   const LINES_PER_PAGE = 8;  // + blank + up to 2 footer lines = the glasses' body
   const FOLLOWUP_MS = 10000; // conversation mode: listen this long after an answer
   const CONVO_NAME = "conversationMode";
+  const AUTOSAVE_NAME = "autoSave";
 
   const READ_PROMPT =
     "Read out all the text in the photo. If it isn't in English, translate it into English.";
@@ -20,6 +21,7 @@
     more:    (origin) => ask(MORE_PROMPT, origin),
     ask:     () => startAsk("menu"),
     next:    () => { if (!nextPage()) sendPage(); },
+    save:    () => saveCurrent(false),
     hold:    () => startAsk("hold"),
     release: () => { if (dict) finishAsk(); else flash("Didn't catch that. Try again."); },
   };
@@ -33,6 +35,7 @@
     { say: "Tell me more",   act: "more",    desc: "Tell me more about the thing in the photo." },
     { say: "Ask a question", act: "ask",     desc: "Start listening for a spoken question about the photo." },
     { say: "Next page",      act: "next",    desc: "Show the next page of the answer on the glasses." },
+    { say: "Save",           act: "save",    desc: "Save the current photo so I can add it to my camera roll." },
   ];
 
   // ---- storage (Mira store on device, localStorage when testing in a browser)
@@ -101,7 +104,7 @@
     if (pages.length > 1) {
       footer.push("(" + (page + 1) + "/" + pages.length + ")" + (morePages() ? " say NEXT PAGE for more" : ""));
     }
-    if (dict && dict.mode === "followup") footer.push("Listening... ask a follow-up");
+    if (dict && dict.mode === "followup") footer.push("Listening...");
     let lines = pages[page];
     if (footer.length) lines = lines.concat("", ...footer);
     miraCompanion.sendToApp({ t: lines.join("|") }).catch((e) => log("send failed: " + e));
@@ -152,6 +155,48 @@
     if (ok && $("convo").checked) startAsk("followup");
   }
 
+  // ---- saved photos (kept on the phone until you add them to the camera roll)
+  let current = null; // last capture: {at, jpeg, answer}
+  async function saveCurrent(quiet) {
+    if (!current) { if (!quiet) flash("Nothing to save yet. Say CAPTURE first."); return; }
+    try {
+      const added = await Saved.add(current);
+      await renderSaved();
+      if (quiet) return;
+      log(added ? "photo saved" : "photo already saved");
+      flash(added ? "Saved. Add it to your camera roll from the Pokedex page on your phone." : "Already saved.");
+      setTimeout(sendPage, 2500); // then put the answer back
+    } catch (e) {
+      log("save failed: " + ((e && e.message) || e));
+      if (!quiet) flash("Couldn't save the photo.");
+    }
+  }
+  async function renderSaved() {
+    const items = await Saved.list();
+    $("savedcount").textContent = items.length;
+    $("savedbox").hidden = items.length === 0;
+    const grid = $("savedgrid");
+    grid.textContent = "";
+    for (const item of items.slice().reverse()) {
+      const img = document.createElement("img");
+      img.src = "data:image/jpeg;base64," + item.jpeg;
+      img.alt = item.answer;
+      img.title = item.answer;
+      img.addEventListener("click", () => shareSaved([item])); // one photo
+      grid.append(img);
+    }
+  }
+  async function shareSaved(items) {
+    if (!items.length) return;
+    try {
+      await Saved.share(items);
+      status("Shared " + items.length + " photo(s). Choose \"Save Image\" to add to Photos.");
+    } catch (e) {
+      if (e && e.name === "AbortError") return; // closed the share sheet
+      status((e && e.message) || String(e));
+    }
+  }
+
   // New photo -> new conversation. An optional question replaces the default
   // "what is this?" prompt (e.g. typing "what does this say?" before capturing).
   function scan(origin, question) {
@@ -166,7 +211,10 @@
       $("chat").textContent = "";
       if (question) addChat("me", question);
       status("Asking Claude...");
-      return Claude.describe(key, jpeg, question);
+      const answer = await Claude.describe(key, jpeg, question);
+      current = { at: Date.now(), jpeg, answer };
+      if ($("autosave").checked) saveCurrent(true);
+      return answer;
     });
   }
 
@@ -355,6 +403,26 @@
   async function init() {
     $("key").value = await load(KEY_NAME);
     $("convo").checked = (await load(CONVO_NAME)) !== "off";
+    $("autosave").checked = (await load(AUTOSAVE_NAME)) === "on";
+    $("autosave").addEventListener("change", () => save(AUTOSAVE_NAME, $("autosave").checked ? "on" : "off"));
+    $("savebtn").addEventListener("click", () => saveCurrent(false));
+    $("shareall").addEventListener("click", async () => shareSaved(await Saved.list()));
+    // Tap twice to clear (web-view confirm() dialogs may not be supported).
+    let armed = 0;
+    $("clearsaved").addEventListener("click", async () => {
+      const btn = $("clearsaved");
+      if (Date.now() - armed > 3000) {
+        armed = Date.now();
+        btn.textContent = "Tap again to clear (camera roll copies stay)";
+        setTimeout(() => { btn.textContent = "Clear saved photos"; }, 3000);
+        return;
+      }
+      armed = 0;
+      btn.textContent = "Clear saved photos";
+      await Saved.clear();
+      renderSaved();
+    });
+    renderSaved();
     $("convo").addEventListener("change", () => {
       save(CONVO_NAME, $("convo").checked ? "on" : "off");
       if (!$("convo").checked && dict && dict.mode === "followup") cancelAsk();

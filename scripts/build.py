@@ -36,7 +36,7 @@ comp = root / "companion"
 ui = (comp / "index.html").read_text(encoding="utf-8")
 scripts = "".join(
     f"<script>\n{(comp / name).read_text(encoding='utf-8')}\n</script>\n"
-    for name in ("camera.js", "claude.js", "app.js")
+    for name in ("camera.js", "claude.js", "saved.js", "app.js")
 )
 html = (
     '<!doctype html><html><head><meta charset="utf-8">'
