@@ -51,7 +51,7 @@ Then open **Settings** on the Pokedex phone page and paste your Anthropic API ke
 
 ## Controls
 
-Every capture starts a new conversation about that photo. Trigger words work at any time, including during the 10-second follow-up window. Questions after it are about the same photo until you capture again.
+Every capture starts a new conversation about that photo. Trigger words work at any time, including during the 5-second follow-up window. Questions after it are about the same photo until you capture again.
 
 | Input | Action |
 |---|---|
@@ -61,14 +61,20 @@ Every capture starts a new conversation about that photo. Trigger words work at 
 | Say **"Ask a question"**, then your question | Any spoken question (Mira dictation; sent when you pause) |
 | Say **"Next page"** | Next page of a long answer |
 | Say **"Save"** (or ring menu / phone **Save photo**) | Keep the current photo in **Saved photos** on the phone page |
-| Just talk, right after an answer | **Conversation mode:** for 10 s after each answer the glasses listen for a follow-up question (toggle in Settings) |
+| Just talk, right after an answer | **Conversation mode:** for 5 s after each answer the glasses listen for a follow-up question (title shows "listening..."; toggle in Settings) |
+| Say **"Stop listening"** / "never mind", or **double tap** | End listening early |
+| Say **"Show picture"** | Show a rough grayscale picture of the last capture (also shown while Claude thinks) |
 | Tap touch bar | New photo + description, or run the highlighted menu item |
 | Swipe (ring or touch bar) | Open the action menu / move the highlight. Nothing runs until you tap; an untouched menu closes after 10 s |
 | Hold touch bar | Talk while holding; your question is sent when you let go |
-| Double tap | Mira navigation (sidebar/Home) |
+| Double tap | Closes the menu / picture or stops listening while one is showing; otherwise Mira navigation (sidebar/Home) |
 | Phone **Scan** / **Ask** | Same actions from the phone (typing or keyboard dictation) |
 
-The ring menu holds: Capture, Read it, Tell me more, Ask a question, Next page, Save photo, Cancel.
+The ring menu holds: Capture, Read it, Tell me more, Ask a question, Show picture, Next page, Save photo, Cancel.
+
+## Picture on the glasses
+
+Each capture is also turned into a 192x144, 15-level grayscale picture (contrast-stretched and dithered on the phone, `companion/picture.js`) and sent with `miraCompanion.setBytesForApp`. The glasses download it in 376-byte chunks, verify an FNV-1a checksum, and draw it with `bitmap4`.
 
 ## Saving photos
 

@@ -5,8 +5,8 @@
   const KEY_NAME = "anthropicKey";
   const URL_NAME = "cameraUrl";
   const LINE_CHARS = 40;     // ~fits 592px at the 24px font
-  const LINES_PER_PAGE = 8;  // + blank + up to 2 footer lines = the glasses' body
-  const FOLLOWUP_MS = 10000; // conversation mode: listen this long after an answer
+  const LINES_PER_PAGE = 9;  // + blank + page footer = the glasses' body
+  const FOLLOWUP_MS = 5000;  // conversation mode: listen this long after an answer
   const CONVO_NAME = "conversationMode";
   const AUTOSAVE_NAME = "autoSave";
 
@@ -22,6 +22,11 @@
     ask:     () => startAsk("menu"),
     next:    () => { if (!nextPage()) sendPage(); },
     save:    () => saveCurrent(false),
+    stop:    () => cancelAsk(),
+    pic:     () => {
+      if (!current) { flash("No picture yet. Say CAPTURE first."); return; }
+      if (hasBridge) miraCompanion.sendToApp({ type: "pic" }).catch(() => {});
+    },
     hold:    () => startAsk("hold"),
     release: () => { if (dict) finishAsk(); else flash("Didn't catch that. Try again."); },
   };
@@ -36,6 +41,8 @@
     { say: "Ask a question", act: "ask",     desc: "Start listening for a spoken question about the photo." },
     { say: "Next page",      act: "next",    desc: "Show the next page of the answer on the glasses." },
     { say: "Save",           act: "save",    desc: "Save the current photo so I can add it to my camera roll." },
+    { say: "Show picture",   act: "pic",     desc: "Show a rough picture of the last capture on the glasses." },
+    { say: "Stop listening", act: "stop",    desc: "Stop listening for a question." },
   ];
 
   // ---- storage (Mira store on device, localStorage when testing in a browser)
@@ -104,7 +111,6 @@
     if (pages.length > 1) {
       footer.push("(" + (page + 1) + "/" + pages.length + ")" + (morePages() ? " say NEXT PAGE for more" : ""));
     }
-    if (dict && dict.mode === "followup") footer.push("Listening...");
     let lines = pages[page];
     if (footer.length) lines = lines.concat("", ...footer);
     miraCompanion.sendToApp({ t: lines.join("|") }).catch((e) => log("send failed: " + e));
@@ -211,6 +217,8 @@
       $("chat").textContent = "";
       if (question) addChat("me", question);
       status("Asking Claude...");
+      // Rough picture for the glasses, shown while Claude thinks.
+      Picture.send(jpeg).catch((e) => log("picture: " + ((e && e.message) || e)));
       const answer = await Claude.describe(key, jpeg, question);
       current = { at: Date.now(), jpeg, answer };
       if ($("autosave").checked) saveCurrent(true);
@@ -267,7 +275,7 @@
     const v = VOICE.find((x) => norm(x.say) === norm(m.command));
     if (!v) { log('voice: "' + m.command + '" (unknown)'); return; }
     if (isRepeat(v)) return; // already handled as dictated words; don't touch the new window
-    if (dict && dict.mode !== "followup") return; // part of an explicit question
+    if (dict && dict.mode !== "followup" && v.act !== "stop") return; // part of an explicit question
     await cancelAsk(); // trigger words win over the follow-up window
     runCommand(v, "voice");
   }
@@ -308,13 +316,9 @@
       return;
     }
     if (dict !== d) return; // cancelled while starting
-    if (mode === "followup") {
-      sendPage(); // adds the "Listening..." line under the answer
-      d.timer = setTimeout(followupTimeout, FOLLOWUP_MS);
-    } else if (mode === "menu") {
-      flash("Listening... ask your question.");
-      d.timer = setTimeout(finishAsk, 15000);
-    }
+    if (mode !== "hold") glassesListening(true); // hold shows it on the glasses already
+    if (mode === "followup") d.timer = setTimeout(followupTimeout, FOLLOWUP_MS);
+    else if (mode === "menu") d.timer = setTimeout(finishAsk, 15000);
   }
   // Window over: if you're mid-sentence, wait for Mira to mark it final
   // (up to 10 s more); otherwise close quietly.
@@ -336,9 +340,14 @@
     dict = null;
     clearTimeout(d.timer);
     $("question").placeholder = "Ask about the photo...";
+    if (d.mode !== "hold") glassesListening(false);
     try { await miraCompanion.stopDictation(); } catch (e) {}
-    if (d.mode === "followup") sendPage(); // remove the "Listening..." line
   }
+  function glassesListening(on) {
+    if (hasBridge) miraCompanion.sendToApp({ type: on ? "listen" : "quiet" }).catch(() => {});
+  }
+  // Said on their own, these end listening instead of becoming a question.
+  const STOP_WORDS = ["stop", "stop listening", "never mind", "nevermind", "cancel", "no thanks", "nothing"];
   // Stop listening and use what was heard.
   async function finishAsk() {
     if (!dict) return;
@@ -346,16 +355,17 @@
     dict = null;
     clearTimeout(d.timer);
     $("question").placeholder = "Ask about the photo...";
+    if (d.mode !== "hold") glassesListening(false);
     let text = d.text;
     try {
       const r = await miraCompanion.stopDictation(); // keeps voice commands running
       if (r && typeof r.text === "string" && r.text.trim()) text = r.text.trim();
     } catch (e) { log("stopDictation: " + ((e && e.message) || e)); }
     if (!text) {
-      if (d.mode === "followup") sendPage();
-      else flash("Didn't catch that. Try again.");
+      if (d.mode !== "followup") flash("Didn't catch that. Try again.");
       return;
     }
+    if (STOP_WORDS.includes(norm(text))) { log('heard "' + text + '": stopped listening'); return; }
     // A trigger word said on its own is a command, not a question.
     const v = VOICE.find((x) => norm(x.say) === norm(text));
     if (v) { runCommand(v, "voice"); return; }
@@ -395,7 +405,7 @@
   }
 
   async function onAction(a) {
-    if (dict && dict.mode === "followup" && a !== "ask" && a !== "hold") await cancelAsk();
+    if (dict && dict.mode === "followup" && !["ask", "hold", "stop", "pic"].includes(a)) await cancelAsk();
     ACTIONS[a]("glasses");
   }
 
@@ -446,7 +456,8 @@
     $("voicehelp").textContent =
       'Say: "' + VOICE.map((v) => v.say).join('", "') + '". On the glasses: tap = capture, ' +
       "swipe = action menu, hold = ask out loud. Or type any question above.";
-    if (hasBridge) $("voicehelp").textContent += " After each answer the glasses listen for 10 s for a follow-up.";
+    if (hasBridge) $("voicehelp").textContent += " After each answer the glasses listen for 5 s for a follow-up" +
+      ' (double tap or say "Stop listening" to end it sooner).';
 
     if (hasBridge) {
       miraCompanion.onFromApp((m) => {
