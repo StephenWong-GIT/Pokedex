@@ -1,10 +1,12 @@
 // picture.js — a rough copy of each capture for the glasses display:
-// 192x144, 15 gray levels (gray 15 is transparent on the glasses, so 0..14),
-// auto-contrast + error-diffusion dithering, packed two pixels per byte.
-// Sent with miraCompanion.setBytesForApp; the glasses download and check it.
+// a 240x180 picture followed by a 120x90 thumbnail, 15 gray levels (gray 15
+// is transparent on the glasses, so 0..14), auto-contrast + error-diffusion
+// dithering, packed two pixels per byte. Sent with miraCompanion.setBytesForApp;
+// the glasses download and check it. Sizes must match src/pokedex.rs.
 
 const Picture = (() => {
-  const W = 192, H = 144, LEVELS = 14;
+  const SIZES = [[240, 180], [120, 90]];
+  const LEVELS = 14;
   let nextId = 1;
 
   function loadImage(jpegB64) {
@@ -18,6 +20,14 @@ const Picture = (() => {
 
   async function encode(jpegB64) {
     const img = await loadImage(jpegB64);
+    const parts = SIZES.map(([w, h]) => encodeSize(img, w, h));
+    const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    let at = 0;
+    for (const p of parts) { out.set(p, at); at += p.length; }
+    return out;
+  }
+
+  function encodeSize(img, W, H) {
     // Center-crop to 4:3 so nothing is squashed.
     const sw = img.naturalWidth, sh = img.naturalHeight;
     let cw = sw, ch = (sw * 3) / 4;
@@ -81,5 +91,5 @@ const Picture = (() => {
     return true;
   }
 
-  return { send, encode, fnv1a, W, H };
+  return { send, encode, fnv1a, SIZES };
 })();

@@ -4,8 +4,19 @@
   const hasBridge = typeof miraCompanion !== "undefined";
   const KEY_NAME = "anthropicKey";
   const URL_NAME = "cameraUrl";
-  const LINE_CHARS = 40;     // ~fits 592px at the 24px font
-  const LINES_PER_PAGE = 9;  // + blank + page footer = the glasses' body
+  // Lines are wrapped by pixel width using the glasses' 24 px font metrics
+  // (ASCII advances from Mira's SDK), so they fill the line without clipping.
+  const LINE_PX = 592;       // full text width
+  const NARROW_PX = 456;     // first lines, beside the picture thumbnail
+  const NARROW_LINES = 3;
+  const ADV24 = [6, 7, 8, 15, 13, 19, 17, 4, 8, 8, 12, 14, 5, 7, 5, 8, 15, 10, 13, 12, 15, 14, 14, 13,
+    14, 14, 7, 7, 14, 14, 14, 12, 24, 16, 15, 15, 17, 14, 13, 17, 18, 6, 11, 15, 13, 21, 18, 18, 15,
+    18, 16, 14, 14, 18, 16, 24, 15, 14, 15, 8, 8, 8, 14, 8, 6, 13, 15, 12, 15, 13, 9, 14, 13, 5, 6,
+    12, 4, 22, 14, 14, 15, 14, 9, 11, 10, 14, 13, 20, 12, 13, 12, 8, 6, 8, 14];
+  const px = (str) => { let n = 0; for (const c of str) n += ADV24[c.charCodeAt(0) - 32] || 24; return n; };
+  // 8 + blank + page footer = 10 lines, which keeps the text clear of Mira's
+  // SAY hint pill along the bottom of the display.
+  const LINES_PER_PAGE = 8;
   const FOLLOWUP_MS = 5000;  // conversation mode: listen this long after an answer
   const CONVO_NAME = "conversationMode";
   const AUTOSAVE_NAME = "autoSave";
@@ -78,23 +89,32 @@
   // ---- glasses messaging
   // Glasses parse {"t":"line|line"} with a simple prefix match, so strip
   // characters that would break that: quotes, backslashes, '|', non-ASCII.
-  function wrap(text) {
+  // maxFor(i) = max pixel width of line i (narrower beside the thumbnail).
+  function wrap(text, maxFor = () => LINE_PX) {
     const clean = text
       .replace(/[\u2018\u2019]/g, "'")
       .replace(/[\u201C\u201D"\\|]/g, "")
       .replace(/[\u2013\u2014]/g, "-")
       .replace(/[^\x20-\x7E]/g, " ")
       .replace(/\s+/g, " ")
-      .trim();
+      .trim()
+      .replace(/^@+/, ""); // '@' at the start is the glasses' thumbnail marker
     const lines = [];
     let line = "";
-    for (const word of clean.split(" ")) {
-      if ((line + " " + word).trim().length > LINE_CHARS) {
-        if (line) lines.push(line);
-        line = word.slice(0, LINE_CHARS);
-      } else {
+    for (let word of clean.split(" ")) {
+      if (px((line + " " + word).trim()) <= maxFor(lines.length)) {
         line = (line + " " + word).trim();
+        continue;
       }
+      if (line) lines.push(line);
+      // A word wider than a whole line is split across lines.
+      while (px(word) > maxFor(lines.length)) {
+        let n = word.length;
+        while (n > 1 && px(word.slice(0, n)) > maxFor(lines.length)) n--;
+        lines.push(word.slice(0, n));
+        word = word.slice(n);
+      }
+      line = word;
     }
     if (line) lines.push(line);
     return lines;
@@ -113,10 +133,14 @@
     }
     let lines = pages[page];
     if (footer.length) lines = lines.concat("", ...footer);
-    miraCompanion.sendToApp({ t: lines.join("|") }).catch((e) => log("send failed: " + e));
+    const mark = page === 0 && pagesHaveThumb ? "@" : ""; // glasses: draw the thumbnail
+    miraCompanion.sendToApp({ t: mark + lines.join("|") }).catch((e) => log("send failed: " + e));
   }
-  function show(text) {
-    const lines = wrap(text);
+  let pagesHaveThumb = false;
+  function show(text, isAnswer) {
+    // Answers about a photo whose picture reached the glasses get a thumbnail.
+    pagesHaveThumb = !!(isAnswer && current && current.picSent);
+    const lines = pagesHaveThumb ? wrap(text, (i) => (i < NARROW_LINES ? NARROW_PX : LINE_PX)) : wrap(text);
     pages = [];
     for (let i = 0; i < lines.length; i += LINES_PER_PAGE) pages.push(lines.slice(i, i + LINES_PER_PAGE));
     if (!pages.length) pages = [[""]];
@@ -147,7 +171,7 @@
       status("Done in " + Math.round(performance.now() - t0) + " ms");
       addChat("bot", answer);
       log(label + ": " + answer);
-      show(answer);
+      show(answer, true);
       ok = true;
     } catch (e) {
       const msg = e && e.message ? e.message : String(e);
@@ -218,9 +242,12 @@
       if (question) addChat("me", question);
       status("Asking Claude...");
       // Rough picture for the glasses, shown while Claude thinks.
-      Picture.send(jpeg).catch((e) => log("picture: " + ((e && e.message) || e)));
+      const shot = { at: Date.now(), jpeg, answer: "", picSent: false };
+      current = shot;
+      Picture.send(jpeg).then((ok) => { shot.picSent = ok; })
+        .catch((e) => log("picture: " + ((e && e.message) || e)));
       const answer = await Claude.describe(key, jpeg, question);
-      current = { at: Date.now(), jpeg, answer };
+      shot.answer = answer;
       if ($("autosave").checked) saveCurrent(true);
       return answer;
     });

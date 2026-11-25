@@ -8,11 +8,16 @@
 //   swipe / ring   open the action menu and move the highlight (nothing runs
 //                  until you tap; the menu closes after MENU_IDLE_MS)
 //   hold / release talk while holding to ask a question (phone dictation)
-//   double tap     close the menu / picture, or stop listening. Claimed only
-//                  while one of those is showing; otherwise Mira's sidebar.
+//   double tap     on an answer: show the big picture; in the menu: close it;
+//                  while listening: stop. Claimed only then, so on the idle
+//                  screen and on the big picture it opens Mira's sidebar.
 //
-// The phone also sends a 192x144, 4-bit grayscale copy of each capture
-// (setBytesForApp), shown while Claude thinks and on "Show picture".
+// The phone also sends a 4-bit grayscale copy of each capture
+// (setBytesForApp): a 240x180 picture followed by a 120x90 thumbnail. The big
+// one shows while Claude thinks and on "Show picture"; the thumbnail sits
+// beside the first page of the answer.
+//
+// Keep text above y=430: Mira's SAY hint pill is drawn along the bottom.
 //
 // Voice commands are handled entirely on the phone. The phone does all
 // networking, paging and text wrapping; this side stays tiny.
@@ -43,11 +48,19 @@ const MAX_TEXT: usize = 1024;
 const BUSY_TIMEOUT_MS: u32 = 25_000;
 const MENU_IDLE_MS: u32 = 10_000; // close an untouched menu without running anything
 
-// Picture: 4-bit grayscale, two pixels per byte (left = high nibble).
-const PIC_W: i32 = 192;
-const PIC_H: i32 = 144;
+// Pictures: 4-bit grayscale, two pixels per byte (left = high nibble).
+// 240x180 is about the largest that fits the shared 32 KiB image pool.
+const PIC_W: i32 = 240;
+const PIC_H: i32 = 180;
 const PIC_BYTES: usize = (PIC_W as usize / 2) * PIC_H as usize;
 const PIC_X: i32 = (640 - PIC_W) / 2;
+const THUMB_W: i32 = 120;
+const THUMB_H: i32 = 90;
+const THUMB_BYTES: usize = (THUMB_W as usize / 2) * THUMB_H as usize;
+const THUMB_X: i32 = 640 - 24 - THUMB_W;
+const BODY_Y: i32 = 86;
+const LINE_H: i32 = 34;
+const MAX_LINES: i32 = 10; // last line ends ~y=424, clear of the SAY pill
 
 const HELLO: &[u8] = b"{\"type\":\"hello\"}";
 const CAPTURE: &[u8] = b"{\"type\":\"action\",\"a\":\"capture\"}";
@@ -84,7 +97,7 @@ static mut HOLDING: bool = false;
 static mut LISTENING: bool = false; // phone is listening for a spoken question
 static mut PICTURE: bool = false;   // "Show picture" view
 static mut DOUBLE_TAP: bool = false; // we currently claim double tap
-static mut PIC: [u8; PIC_BYTES] = [0; PIC_BYTES];
+static mut PIC: [u8; PIC_BYTES + THUMB_BYTES] = [0; PIC_BYTES + THUMB_BYTES];
 static mut PIC_READY: bool = false;
 static mut PIC_FRESH: bool = false; // arrived during the current "thinking"
 static mut PIC_READER: companion_bytes::Reader = companion_bytes::Reader::new();
@@ -110,26 +123,29 @@ unsafe fn draw_picture(y: i32) {
     bitmap4(PIC_X, y, PIC_W, PIC_H, PIC.as_ptr(), PIC_BYTES as i32);
 }
 
-/// Body text: lines separated by '|' (the phone pre-wraps them to fit).
-unsafe fn draw_body(mut y: i32) {
-    let body = &BODY[..BODY_LEN];
-    let mut start = 0;
-    for i in 0..=body.len() {
-        if i == body.len() || body[i] == b'|' {
-            let line = &body[start..i];
-            if !line.is_empty() {
-                text(24, y, 592, 32, 15, 0, 0, 24, line.as_ptr(), line.len() as i32);
-            }
-            y += 34;
-            start = i + 1;
-            if y > 440 { break; }
+/// Body text: lines separated by '|' (the phone pre-wraps them to fit). A
+/// leading '@' means "first answer page": draw the thumbnail top-right (the
+/// phone wrapped the first lines narrower to leave room for it).
+unsafe fn draw_body() {
+    let mut body = &BODY[..BODY_LEN];
+    if body.first() == Some(&b'@') {
+        body = &body[1..];
+        if PIC_READY {
+            bitmap4(THUMB_X, 80, THUMB_W, THUMB_H, PIC[PIC_BYTES..].as_ptr(), THUMB_BYTES as i32);
         }
+    }
+    let mut y = BODY_Y;
+    for line in body.split(|b| *b == b'|').take(MAX_LINES as usize) {
+        if !line.is_empty() {
+            text(24, y, 592, 32, 15, 0, 0, 24, line.as_ptr(), line.len() as i32);
+        }
+        y += LINE_H;
     }
 }
 
 unsafe fn render() {
     begin();
-    let title: &[u8] = if MENU_OPEN { b"POKEDEX  -  choose" }
+    let title: &[u8] = if MENU_OPEN { b"POKEDEX  -  tap to choose" }
         else if PICTURE { b"POKEDEX  -  picture" }
         else if HOLDING || LISTENING { b"POKEDEX  -  listening..." }
         else if BUSY { b"POKEDEX  -  thinking..." }
@@ -143,19 +159,17 @@ unsafe fn render() {
             if on { fill_rect(24, y + 6, 6, 30, 15); }
             label(44, y, 540, if on { 15 } else { 5 }, 2, item.0);
         }
-        label(24, 432, 592, 10, 1, b"Swipe to move, tap to choose");
         content::cursor(600, ROW_Y + SEL as i32 * ROW_H + 18, true);
     } else if PICTURE {
-        draw_picture(110);
-        label(24, 280, 592, 10, 1, b"Rough view of the last capture.");
-        label(24, 306, 592, 10, 1, b"Tap, swipe or double tap to go back.");
+        draw_picture(84);
+        label(24, 276, 592, 10, 1, b"Tap or swipe to go back.");
         content::cursor(614, 440, false);
     } else if BUSY && PIC_READY && PIC_FRESH {
         draw_picture(84); // what was captured, while Claude thinks
-        label(24, 250, 592, 15, 0, b"Thinking...");
+        label(24, 276, 592, 15, 0, b"Thinking...");
         content::cursor(614, 440, false);
     } else {
-        draw_body(86);
+        draw_body();
         content::cursor(614, 440, false);
     }
     present();
@@ -206,7 +220,7 @@ unsafe fn handle(msg: &[u8]) -> bool {
         let (id, len, sum) = (number(msg, b"\"id\":"), number(msg, b"\"len\":"), number(msg, b"\"sum\":"));
         PIC_READY = false;
         if let (Some(id), Some(len), Some(sum)) = (id, len, sum) {
-            if len as usize == PIC_BYTES { PIC_READER.start(id, len as usize, sum); }
+            if len as usize == PIC_BYTES + THUMB_BYTES { PIC_READER.start(id, len as usize, sum); }
         }
     } else {
         return false;
@@ -240,9 +254,9 @@ unsafe fn pick() {
     }
 }
 
-/// Take double tap only while there is something for it to close.
+/// Take double tap only while it has a job here; otherwise Mira's sidebar.
 unsafe fn sync_double_tap() {
-    let want = MENU_OPEN || PICTURE || LISTENING;
+    let want = MENU_OPEN || LISTENING || (PIC_READY && !PICTURE && !BUSY && !HOLDING);
     if want != DOUBLE_TAP {
         DOUBLE_TAP = want;
         content::double_tap_local(want);
@@ -321,7 +335,11 @@ pub unsafe extern "C" fn app_event(e: i32) {
         }
         3 => {
             if MENU_OPEN { MENU_OPEN = false; }
-            else if PICTURE { PICTURE = false; }
+            else if PIC_READY && !PICTURE && !BUSY && !HOLDING {
+                // Looking at the picture, not talking: end any follow-up window.
+                if LISTENING { LISTENING = false; queue(STOP); }
+                PICTURE = true;
+            }
             else if LISTENING { LISTENING = false; queue(STOP); }
             else { return; }
         }
