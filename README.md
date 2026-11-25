@@ -55,17 +55,20 @@ Every capture starts a new conversation about that photo. Questions after it are
 
 | Input | Action |
 |---|---|
-| Say **"Capture"** (or "Scan") | New photo + description |
+| Say **"Capture"** | New photo + description |
 | Say **"Read it"** / **"Translate"** | Read the text in the photo, translated to English |
 | Say **"Tell me more"** | Follow-up about the same photo |
+| Say **"Ask a question"**, then your question | Any spoken question (Mira dictation; sent when you pause) |
 | Say **"Next page"** | Next page of a long answer |
-| Tap touch bar | New photo + description |
-| Ring / touch-bar swipe | Next page of a long answer, or a new scan if there's none |
+| Tap touch bar | New photo + description (or pick the highlighted menu item) |
+| Swipe (ring or touch bar) | Open the action menu / move the highlight. Stop swiping and the highlighted item runs after 1.5 s; Cancel closes it |
+| Hold touch bar | Talk while holding; your question is sent when you let go |
 | Double tap | Mira navigation (sidebar/Home) |
-| Phone **Scan** button | New photo (also needed in photo-picker mode) |
-| Phone **Ask** box | Any question about the current photo (iOS keyboard dictation works here) |
+| Phone **Scan** / **Ask** | Same actions from the phone (typing or keyboard dictation) |
 
-Voice uses `miraCompanion.setVoiceCommands` + `startCapture`, whose message format isn't documented yet. Every voice event is written to the phone's **Log**, so check it first if a command does nothing. If Mira passes free-form speech (any words that aren't a command), the app asks Claude about it as a question.
+The ring menu holds: Capture, Read it, Tell me more, Ask a question, Next page, Cancel.
+
+Voice uses Mira's SDK: `setVoiceCommands` + `startCapture` for the commands and `startDictation` for free-form questions. While the Pokedex app is open in the foreground, the glasses microphone stays on so the commands can be heard; Mira releases it when you leave the app. Voice events are written to the phone page's **Log**.
 
 ## First thing to test
 

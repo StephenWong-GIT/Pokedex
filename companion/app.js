@@ -7,16 +7,30 @@
   const LINE_CHARS = 40;     // ~fits 592px at the 24px font
   const LINES_PER_PAGE = 9;  // + 1 footer line = the glasses' 10-line body
 
-  // Spoken phrase -> action. Phrases are what you say to the glasses.
   const READ_PROMPT =
     "Read out all the text in the photo. If it isn't in English, translate it into English.";
+  const MORE_PROMPT = "Tell me more about it.";
+
+  // The same actions from every input: glasses tap / ring menu / hold, voice.
+  const ACTIONS = {
+    capture: (origin) => scan(origin),
+    read:    (origin) => ask(READ_PROMPT, origin),
+    more:    (origin) => ask(MORE_PROMPT, origin),
+    ask:     () => startAsk("menu"),
+    next:    () => { if (!nextPage()) sendPage(); },
+    hold:    () => startAsk("hold"),
+    release: () => { if (dict) finishAsk(); else flash("Didn't catch that. Try again."); },
+  };
+
+  // Voice commands (Mira's Thud recogniser, max 16). The descriptions help it
+  // match natural variations of each phrase.
   const VOICE = [
-    { say: "Capture",      run: () => scan("voice") },
-    { say: "Scan",         run: () => scan("voice") },
-    { say: "Read it",      run: () => ask(READ_PROMPT, "voice") },
-    { say: "Translate",    run: () => ask(READ_PROMPT, "voice") },
-    { say: "Tell me more", run: () => ask("Tell me more about it.", "voice") },
-    { say: "Next page",    run: () => { nextPage(); armVoice(); } },
+    { say: "Capture",        act: "capture", desc: "Take a photo with the camera and say what is in front of me." },
+    { say: "Read it",        act: "read",    desc: "Read out the text in the photo, translated into English." },
+    { say: "Translate",      act: "read",    desc: "Translate the writing in the photo into English." },
+    { say: "Tell me more",   act: "more",    desc: "Tell me more about the thing in the photo." },
+    { say: "Ask a question", act: "ask",     desc: "Start listening for a spoken question about the photo." },
+    { say: "Next page",      act: "next",    desc: "Show the next page of the answer on the glasses." },
   ];
 
   // ---- storage (Mira store on device, localStorage when testing in a browser)
@@ -128,7 +142,6 @@
     } finally {
       working = false;
       setBusy(false);
-      armVoice();
     }
   }
 
@@ -163,44 +176,84 @@
     });
   }
 
-  // ---- voice (Mira mic). The exact message shape isn't documented yet, so
-  // look in the likely fields and log everything to the on-phone Log.
-  function armVoice() {
-    if (!hasBridge || typeof miraCompanion.startCapture !== "function") return;
-    try {
-      const p = miraCompanion.startCapture();
-      if (p && p.catch) p.catch((e) => log("startCapture: " + e));
-    } catch (e) { log("startCapture: " + e); }
-  }
-  function setupVoice() {
-    if (!hasBridge || typeof miraCompanion.setVoiceCommands !== "function") {
+  // ---- voice (glasses mic, via the Mira phone app)
+  // startCapture() keeps the glasses mic open while this app is in the
+  // foreground; Mira then runs our registered commands and, on request,
+  // dictation. Mira releases the mic when the app closes or glasses disconnect.
+  const canVoice = () => hasBridge && typeof miraCompanion.startCapture === "function";
+  async function setupVoice() {
+    if (!canVoice() || typeof miraCompanion.setVoiceCommands !== "function") {
       $("voicehelp").textContent = "Voice: not available here. Type a question, or use the keyboard's dictation mic.";
       return;
     }
     try {
-      const p = miraCompanion.setVoiceCommands(VOICE.map((v) => v.say));
-      if (p && p.catch) p.catch((e) => log("setVoiceCommands: " + e));
-      armVoice();
-      log("voice commands on: " + VOICE.map((v) => v.say).join(", "));
+      const descriptions = {};
+      for (const v of VOICE) descriptions[v.say] = v.desc;
+      await miraCompanion.setVoiceCommands(VOICE.map((v) => v.say), "pokedex", descriptions);
+      await miraCompanion.startCapture();
+      log("voice on: " + VOICE.map((v) => v.say).join(", "));
     } catch (e) {
-      log("voice setup failed: " + e);
+      log("voice setup failed: " + ((e && e.message) || e));
     }
   }
-  function spokenText(m) {
-    for (const k of ["command", "text", "phrase", "transcript", "value", "name", "data"]) {
-      if (typeof m[k] === "string" && m[k].trim()) return m[k].trim();
-    }
-    return "";
+  function onVoiceCommand(m) {
+    if (dict) return; // the question being dictated may contain a command word
+    const v = VOICE.find((x) => x.say.toLowerCase() === String(m.command || "").toLowerCase());
+    log('voice: "' + m.command + '"' + (v ? "" : " (unknown)"));
+    if (v) ACTIONS[v.act]("voice");
   }
-  const norm = (s) => s.toLowerCase().replace(/[^a-z ]/g, "").trim();
-  function onVoice(m) {
-    const said = spokenText(m);
-    const hit = VOICE.find((v) => norm(v.say) === norm(said));
-    if (hit) { log('voice: "' + said + '"'); hit.run(); return; }
-    // Anything else that came through as words: treat it as a question.
-    if (said) { log('voice question: "' + said + '"'); ask(said, "voice"); return; }
-    log("voice event with no text: " + JSON.stringify(m));
-    armVoice();
+
+  // Glasses-only messages that don't change the saved answer pages.
+  function flash(text) {
+    if (hasBridge) miraCompanion.sendToApp({ t: wrap(text).slice(0, 10).join("|") }).catch(() => {});
+  }
+
+  // Spoken questions. mode "hold": talk while holding the touch bar, sent on
+  // release. Otherwise ("menu"/voice): sent when Mira detects you stopped.
+  let dict = null;
+  async function startAsk(mode) {
+    if (working || dict) return;
+    if (!canVoice() || typeof miraCompanion.startDictation !== "function") {
+      flash("Voice questions need the Mira app. Type your question on the phone.");
+      return;
+    }
+    const id = "q" + Date.now();
+    dict = { id, mode, text: "", timer: 0 };
+    $("question").placeholder = "Listening...";
+    if (mode !== "hold") flash("Listening... ask your question.");
+    try {
+      await miraCompanion.startCapture(); // no-op if already running
+      await miraCompanion.startDictation({ captureID: id, endpointDetection: mode !== "hold" });
+      // Give up if nothing usable arrives (hold mode ends on release instead).
+      if (mode !== "hold") dict.timer = setTimeout(finishAsk, 15000);
+    } catch (e) {
+      dict = null;
+      $("question").placeholder = "Ask about the photo...";
+      const msg = (e && e.message) || String(e);
+      log("dictation failed: " + msg);
+      flash("Mic unavailable: " + msg);
+    }
+  }
+  function onDictation(m) {
+    if (!dict || (m.captureID && m.captureID !== dict.id)) return; // late text
+    dict.text = String(m.text || m.confirmedText || "").trim();
+    $("question").placeholder = dict.text || "Listening...";
+    if (m.final && dict.mode !== "hold" && dict.text) finishAsk();
+  }
+  async function finishAsk() {
+    if (!dict) return;
+    const d = dict;
+    dict = null;
+    clearTimeout(d.timer);
+    $("question").placeholder = "Ask about the photo...";
+    let text = d.text;
+    try {
+      const r = await miraCompanion.stopDictation(); // keeps voice commands running
+      if (r && typeof r.text === "string" && r.text.trim()) text = r.text.trim();
+    } catch (e) { log("stopDictation: " + ((e && e.message) || e)); }
+    if (!text) { flash("Didn't catch that. Try again."); return; }
+    log('heard: "' + text + '"');
+    ask(text, "voice");
   }
 
   // ---- camera start, with automatic fallback to the photo picker
@@ -222,7 +275,7 @@
       Camera.use("phone");
       $("preview").hidden = false;
       await Camera.active.start($("preview"));
-      status('Camera OK. Say "Capture", tap the glasses, or swipe the ring.');
+      status('Camera OK. Say "Capture", tap the glasses, or swipe the ring for the menu.');
       log("phone camera started");
     } catch (e) {
       const msg = (e && (e.name + " " + e.message)) || String(e);
@@ -254,15 +307,16 @@
     }
     $("model").textContent = Claude.MODEL;
     $("voicehelp").textContent =
-      'Say: "' + VOICE.map((v) => v.say).join('", "') + '". Or type any question below.';
+      'Say: "' + VOICE.map((v) => v.say).join('", "') + '". On the glasses: tap = capture, ' +
+      "swipe = action menu, hold = ask out loud. Or type any question above.";
 
     if (hasBridge) {
       miraCompanion.onFromApp((m) => {
         if (!m) return;
-        if (m.type === "snap") scan("glasses");
-        else if (m.type === "swipe") { if (!nextPage()) scan("ring"); }
-        else if (m.type === "voiceCommand") onVoice(m);
-        else if (m.type === "hello") { log("glasses connected"); sendPage(); }
+        if (m.type === "action" && ACTIONS[m.a]) ACTIONS[m.a]("glasses");
+        else if (m.type === "voiceCommand") onVoiceCommand(m);
+        else if (m.type === "dictation") onDictation(m);
+        else if (m.type === "hello") { log("glasses connected"); sendPage(); setupVoice(); }
         else log("from glasses: " + JSON.stringify(m));
       });
       setupVoice();
