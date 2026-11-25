@@ -1,6 +1,6 @@
 # Pokedex
 
-A real-world Pokedex for **Mira glasses**. Tap the glasses (or swipe your ring), and the app grabs a camera frame, asks **Claude** what it's looking at, and shows the answer on the glasses.
+A real-world Pokedex for **Mira glasses**. Say "capture" (or tap the glasses / swipe your ring), and the app grabs a camera frame, asks **Claude** what it's looking at, and shows the answer on the glasses. Then ask follow-ups about the same photo: "read it", "translate", "tell me more", or type any question on the phone.
 
 ```
 ring swipe / tap ──► glasses app (Rust/WASM) ──{"type":"snap"}──► phone companion (HTML/JS)
@@ -47,16 +47,25 @@ Then open **Settings** on the Pokedex phone page and paste your Anthropic API ke
 
 - Get one at [console.anthropic.com](https://console.anthropic.com) (separate from a Claude.ai subscription). Set a monthly spend limit.
 - The key is stored **only on your phone** via Mira's companion storage. It is never in this repo.
-- Cost: Haiku + one ~1024px image ≈ $0.002 per scan.
+- Model: `claude-haiku-5-5` at low effort. A scan or follow-up costs well under a cent. Each follow-up re-sends the photo so Claude can still see it.
 
 ## Controls
 
+Every capture starts a new conversation about that photo. Questions after it are about the same photo until you capture again.
+
 | Input | Action |
 |---|---|
-| Tap touch bar | Scan |
-| Ring / touch-bar swipe | Scan |
+| Say **"Capture"** (or "Scan") | New photo + description |
+| Say **"Read it"** / **"Translate"** | Read the text in the photo, translated to English |
+| Say **"Tell me more"** | Follow-up about the same photo |
+| Say **"Next page"** | Next page of a long answer |
+| Tap touch bar | New photo + description |
+| Ring / touch-bar swipe | Next page of a long answer, or a new scan if there's none |
 | Double tap | Mira navigation (sidebar/Home) |
-| Phone **Scan** button | Scan (also needed in photo-picker mode) |
+| Phone **Scan** button | New photo (also needed in photo-picker mode) |
+| Phone **Ask** box | Any question about the current photo (iOS keyboard dictation works here) |
+
+Voice uses `miraCompanion.setVoiceCommands` + `startCapture`, whose message format isn't documented yet. Every voice event is written to the phone's **Log**, so check it first if a command does nothing. If Mira passes free-form speech (any words that aren't a command), the app asks Claude about it as a question.
 
 ## First thing to test
 

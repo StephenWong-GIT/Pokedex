@@ -1,10 +1,13 @@
 // Pokedex — glasses side (Rust -> WASM).
 //
-// Flow: tap the touch bar or swipe the ring  ->  send {"type":"snap"} to the
-// phone companion  ->  phone grabs a camera frame, asks Claude, and replies
+// Flow: tap the touch bar  ->  send {"type":"snap"} to the phone companion
+// ->  phone grabs a camera frame, asks Claude, and replies
 // {"t":"line one|line two|..."}  ->  we draw those lines on the glasses.
+// A swipe (touch bar or ring) sends {"type":"swipe"}: the phone shows the next
+// page of a long answer, or scans if there is none. Voice commands and
+// follow-up questions are handled entirely on the phone.
 //
-// The phone does all networking and text wrapping; this side stays tiny.
+// The phone does all networking, paging and text wrapping; this side stays tiny.
 #![no_std]
 #![allow(static_mut_refs)]
 #[path = "../sdk/Shared/companion.rs"] mod companion;
@@ -32,11 +35,12 @@ static mut BODY: [u8; MAX_TEXT] = [0; MAX_TEXT];
 static mut BODY_LEN: usize = 0;
 static mut BUSY: bool = false;
 static mut SEND_SNAP: bool = false;
+static mut SEND_SWIPE: bool = false;
 static mut SEND_HELLO: bool = false;
 static mut BUSY_MS: u32 = 0; // give up if the phone never answers
 const BUSY_TIMEOUT_MS: u32 = 25_000;
 
-const IDLE_MSG: &[u8] = b"Tap or swipe the ring|to scan what's in front of you.";
+const IDLE_MSG: &[u8] = b"Say CAPTURE, tap, or swipe the ring|to scan what's in front of you.||Then ask: READ IT, TRANSLATE,|TELL ME MORE.";
 
 unsafe fn set_body(s: &[u8]) {
     let n = s.len().min(MAX_TEXT);
@@ -47,7 +51,7 @@ unsafe fn set_body(s: &[u8]) {
 unsafe fn render() {
     begin();
     // Header
-    let title = if BUSY { b"POKEDEX  -  scanning..." as &[u8] } else { b"POKEDEX" };
+    let title = if BUSY { b"POKEDEX  -  thinking..." as &[u8] } else { b"POKEDEX" };
     text(24, 20, 592, 40, 15, 2, 0, 32, title.as_ptr(), title.len() as i32);
     fill_rect(24, 66, 592, 2, 6);
     // Body: lines separated by '|' (phone pre-wraps to fit 640px).
@@ -86,6 +90,7 @@ pub unsafe extern "C" fn app_init() {
     BRIDGE = companion::Companion::new(APP_NAME);
     BUSY = false;
     SEND_SNAP = false;
+    SEND_SWIPE = false;
     SEND_HELLO = true;
     set_body(IDLE_MSG);
     render();
@@ -110,6 +115,7 @@ pub unsafe extern "C" fn app_render(ms: i32) {
         if BUSY_MS > BUSY_TIMEOUT_MS {
             BUSY = false;
             SEND_SNAP = false;
+            SEND_SWIPE = false;
             set_body(b"No answer from the phone.|Is the Pokedex page open in Mira?");
             dirty = true;
         }
@@ -117,6 +123,7 @@ pub unsafe extern "C" fn app_render(ms: i32) {
     // Outgoing: retry on later ticks if the bridge is busy.
     if SEND_HELLO && BRIDGE.send(b"{\"type\":\"hello\"}") { SEND_HELLO = false; }
     if SEND_SNAP && BRIDGE.send(b"{\"type\":\"snap\"}") { SEND_SNAP = false; }
+    if SEND_SWIPE && BRIDGE.send(b"{\"type\":\"swipe\"}") { SEND_SWIPE = false; }
     if dirty { render(); }
 }
 
@@ -124,12 +131,16 @@ pub unsafe extern "C" fn app_render(ms: i32) {
 pub unsafe extern "C" fn app_event(e: i32) {
     // 0 = touch-bar click, 1/2 = swipes (rings only send 1 and 2).
     // Double-click (3) is left to the Shell for navigation.
-    if (e == 0 || e == 1 || e == 2) && !BUSY {
+    if BUSY { return; }
+    if e == 0 {
         BUSY = true;
         BUSY_MS = 0;
         SEND_SNAP = true;
         set_body(b"Looking...");
         render();
+    } else if e == 1 || e == 2 {
+        // Phone decides: next page, or a new scan (it then sends "busy").
+        SEND_SWIPE = true;
     }
 }
 
